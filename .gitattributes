@@ -1,0 +1,8 @@
+# Shell scripts and server config must keep Unix line endings, even when the repository
+# is checked out on Windows; a Windows line ending breaks them on the Linux VM.
+*.sh            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Caddyfile       text eol=lf
+*.env.example   text eol=lf
+.env.example    text eol=lf

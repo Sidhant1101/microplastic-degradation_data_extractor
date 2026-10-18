@@ -1,0 +1,14 @@
+# Build context for the backend image is the repository root.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.git
+.env
+.env.*
+frontend
+data
+ollama
+backups
+deploy
+*.md
+!backend/**/*.md

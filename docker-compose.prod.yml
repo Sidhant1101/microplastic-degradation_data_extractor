@@ -1,0 +1,98 @@
+# Production overrides: HTTPS reverse proxy, optional login, resource limits, nightly backups.
+#
+#   DOMAIN=extractor.example.org and ACME_EMAIL=you@example.org in .env,
+#   DNS A/AAAA record pointing at the server, ports 80 and 443 open, then:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Add -f docker-compose.gpu.yml as well when the server has an NVIDIA GPU.
+# On Azure, deploy/azure/azure.sh does all of this for you (see DEPLOY_AZURE.md).
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env for production}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env for production (certificate notices)}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Optional login: a basic_auth block in deploy/auth/*.caddy (see deploy/Caddyfile)
+      - ./deploy/auth:/etc/caddy/auth:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+    networks: [appnet]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # The frontend is reached only through Caddy in production.
+  frontend:
+    ports: !reset []
+    environment:
+      BACKEND_INTERNAL_URL: http://backend:8000
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  backend:
+    environment:
+      APP_ENV: production
+      CORS_ORIGINS: https://${DOMAIN}
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  worker:
+    environment:
+      APP_ENV: production
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 3G }
+
+  postgres:
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+
+  ollama:
+    deploy:
+      resources:
+        limits:
+          memory: ${OLLAMA_MEMORY_LIMIT:-16G}
+
+  # Nightly pg_dump into ./backups, keeping BACKUP_KEEP_DAYS days.
+  db-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-mpai}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-mpai}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          f=/backups/mpai_$$(date +%Y%m%d_%H%M%S).sql.gz
+          pg_dump --no-owner | gzip > "$$f" && echo "backup written: $$f"
+          find /backups -name 'mpai_*.sql.gz' -mtime +$${BACKUP_KEEP_DAYS} -delete
+          sleep 86400
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [appnet]
+
+volumes:
+  caddy_data:
+  caddy_config:
